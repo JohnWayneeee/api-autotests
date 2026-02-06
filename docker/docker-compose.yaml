@@ -1,0 +1,67 @@
+# .env должен лежать рядом с этим файлом (в docker/) — Compose ищет его здесь для подстановки переменных.
+# Скопируйте .env из корня проекта в docker/ или создайте docker/.env с POSTGRES_* и DB_*.
+services:
+  postgres:
+    image: postgres:15
+    container_name: postgres_db
+    environment:
+      - POSTGRES_USER=api_user
+      - POSTGRES_PASSWORD=api_pass
+      - POSTGRES_DB=api
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U api_user -d api"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: fastapi_app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - DB_HOST=postgres
+    ports:
+      - "3000:3000"
+  # login: api_user password: Admin1234
+  cloudbeaver:
+    image: dbeaver/cloudbeaver:latest
+    container_name: cloudbeaver
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    volumes:
+      - cloudbeaver_data:/opt/cloudbeaver/workspace
+    ports:
+      - "8978:8978"
+
+  tests: # сервис для PyTest
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    depends_on:
+      app:
+        condition: service_started # Ждёт API
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      - DB_HOST=postgres
+      - API_HOST=app:3000 # Для API-тестов
+    #      - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright  # Если используете Playwright
+    volumes:
+      - ../:/app # Монтирует весь корень проекта (тесты обновляются на лету)
+    command: uv run pytest tests/ -v --tb=short -s # Адаптируйте путь к тестам
+    profiles: ["test"] # Запускается только с --profile test
+
+volumes:
+  cloudbeaver_data:
